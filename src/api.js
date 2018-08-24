@@ -88,13 +88,21 @@ export async function logout(
   storage: AsyncStorage = defaultStorage()
 ): Promise<void> {
   const session = await getSession(storage)
-  if (session) {
-    try {
-      await WebIdOidc.logout(storage, session.idp)
-    } catch (err) {
-      console.warn('Error logging out:')
-      console.error(err)
-    }
-    await clearSession(storage)
+  if (!session) {
+    return
   }
+  switch (session.authType) {
+    case 'WebID-OIDC':
+      try {
+        await WebIdOidc.logout(storage)
+      } catch (err) {
+        console.warn('Error logging out:')
+        console.error(err)
+      }
+      break
+    case 'WebID-TLS':
+    default:
+      break
+  }
+  return clearSession(storage)
 }
