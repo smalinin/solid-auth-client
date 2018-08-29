@@ -5,9 +5,9 @@ import {
   loginHandler,
   storageHandler,
   startPopupServer
-} from './popup'
+} from '../popup'
 import { polyfillWindow, polyunfillWindow } from './spec-helpers'
-import { defaultStorage } from './storage'
+import { defaultStorage } from '../storage'
 
 beforeEach(polyfillWindow)
 
@@ -96,7 +96,6 @@ describe('loginHandler', () => {
     const mockCallback = jest.fn()
     const handler = loginHandler(options, mockCallback)
     const session = {
-      authType: 'WebID-TLS',
       idp: 'https://example.com',
       webId: 'https://me.example.com/profile#me'
     }
@@ -156,8 +155,8 @@ describe('startPopupServer', () => {
     const store = defaultStorage()
     await expect(
       startPopupServer(store, window, {
-        popupUri: null,
-        callbackUri: null,
+        popupUri: '',
+        callbackUri: '',
         storage: store
       })
     ).rejects.toBeInstanceOf(Error)
@@ -167,7 +166,6 @@ describe('startPopupServer', () => {
     expect.assertions(1)
     const store = defaultStorage()
     const session = {
-      authType: 'WebIdTls',
       idp: 'https://localhost',
       webId: 'https://localhost/profile#me'
     }

@@ -1,15 +1,18 @@
 /* eslint-env jest */
 import fs from 'fs'
+import path from 'path'
 import jwt from 'jsonwebtoken'
 import nock from 'nock'
 import rsaPemToJwk from 'rsa-pem-to-jwk'
 
-import { currentSession, fetch, login, logout } from './api'
-import { saveHost } from './host'
-import { getSession, saveSession } from './session'
+import SolidAuthClient from '../solid-auth-client'
+import { saveHost } from '../host'
+import { getSession, saveSession } from '../session'
 import { polyfillWindow, polyunfillWindow } from './spec-helpers'
-import { asyncStorage } from './storage'
-import { sessionKeys } from '../test-keys/session-keys'
+import { asyncStorage } from '../storage'
+import { sessionKeys } from './session-keys'
+
+const instance = new SolidAuthClient()
 
 /*
  * OIDC test data:
@@ -30,7 +33,7 @@ const oidcRegistration = {
   client_id: 'the-client-id'
 }
 
-const pem = fs.readFileSync('./test-keys/id_rsa')
+const pem = fs.readFileSync(path.join(__dirname, './id_rsa'))
 
 const jwks = {
   keys: [
@@ -70,6 +73,9 @@ const verifySerializedKey = ssk => {
 beforeEach(() => {
   polyfillWindow()
   nock.disableNetConnect()
+  instance.removeAllListeners('login')
+  instance.removeAllListeners('logout')
+  instance.removeAllListeners('session')
 })
 
 afterEach(() => {
@@ -98,33 +104,15 @@ describe('login', () => {
       .get('/.well-known/openid-configuration')
       .reply(404)
 
-    const session = await login('https://localhost')
+    const session = await instance.login('https://localhost')
     expect(session).toBeNull()
     expect(await getStoredSession()).toBeNull()
-  })
-
-  describe('WebID-TLS', () => {
-    it('can log in with WebID-TLS', async () => {
-      expect.assertions(2)
-      const webId = 'https://localhost/profile#me'
-      nock('https://localhost/')
-        .head('/')
-        .reply(200, '', { user: webId })
-
-      const session = await login('https://localhost')
-      expect(session.webId).toBe(webId)
-      expect(await getStoredSession()).toEqual(session)
-    })
   })
 
   describe('WebID-OIDC', () => {
     it('can log in with WebID-OIDC', async () => {
       expect.assertions(6)
       nock('https://localhost/')
-        // try to log in with WebID-TLS
-        .head('/')
-        .reply(200)
-        // no user header, so try to use WebID-OIDC
         .get('/.well-known/openid-configuration')
         .reply(200, oidcConfiguration)
         .get('/jwks')
@@ -132,8 +120,7 @@ describe('login', () => {
         .post('/register')
         .reply(200, oidcRegistration)
 
-      const redirectFn = await login('https://localhost')
-      await redirectFn()
+      await instance.login('https://localhost')
       const location = new window.URL(window.location.href)
       expect(location.origin).toEqual('https://localhost')
       expect(location.pathname).toEqual('/authorize')
@@ -150,10 +137,6 @@ describe('login', () => {
     it('uses the provided redirect uri', async () => {
       expect.assertions(6)
       nock('https://localhost')
-        // try to log in with WebID-TLS
-        .head('/')
-        .reply(200)
-        // no user header, so try to use WebID-OIDC
         .get('/.well-known/openid-configuration')
         .reply(200, oidcConfiguration)
         .get('/jwks')
@@ -161,10 +144,9 @@ describe('login', () => {
         .post('/register')
         .reply(200, oidcRegistration)
 
-      const redirectFn = await login('https://localhost', {
+      await instance.login('https://localhost', {
         callbackUri: 'https://app.biz/welcome/'
       })
-      await redirectFn()
       const location = new window.URL(window.location.href)
       expect(location.origin).toEqual('https://localhost')
       expect(location.pathname).toEqual('/authorize')
@@ -181,10 +163,6 @@ describe('login', () => {
     it('strips the hash fragment from the current URL when providing the default redirect URL', async () => {
       expect.assertions(6)
       nock('https://localhost/')
-        // try to log in with WebID-TLS
-        .head('/')
-        .reply(200)
-        // no user header, so try to use WebID-OIDC
         .get('/.well-known/openid-configuration')
         .reply(200, oidcConfiguration)
         .get('/jwks')
@@ -194,8 +172,7 @@ describe('login', () => {
 
       window.location.href += '#foo-bar'
 
-      const redirectFn = await login('https://localhost')
-      await redirectFn()
+      await instance.login('https://localhost')
       const location = new window.URL(window.location.href)
       expect(location.origin).toEqual('https://localhost')
       expect(location.pathname).toEqual('/authorize')
@@ -208,11 +185,6 @@ describe('login', () => {
       expect(location.searchParams.get('scope')).toEqual('openid')
       expect(location.searchParams.get('client_id')).toEqual('the-client-id')
     })
-
-    // TODO: this is broken due to https://github.com/anvilresearch/oidc-rp/issues/26
-    it(
-      'resolves to a `null` session when none of the recognized auth schemes are available'
-    )
   })
 })
 
@@ -220,7 +192,6 @@ describe('currentSession', () => {
   it('can find the current session if stored', async () => {
     expect.assertions(2)
     await saveSession(window.localStorage)({
-      authType: 'WebID-OIDC',
       idp: 'https://localhost',
       webId: 'https://person.me/#me',
       accessToken: 'fake_access_token',
@@ -228,29 +199,32 @@ describe('currentSession', () => {
       sessionKey
     })
 
-    const session = await currentSession()
+    const session = await instance.currentSession()
     expect(session.webId).toBe('https://person.me/#me')
     expect(await getStoredSession()).toEqual(session)
   })
 
   it('resolves to a `null` session when there is no stored session or OIDC response', async () => {
     expect.assertions(2)
-    const session = await currentSession()
+    const session = await instance.currentSession()
     expect(session).toBeNull()
     expect(await getStoredSession()).toBeNull()
   })
 
   describe('WebID-OIDC', () => {
-    it('can find the current session from the URL auth response', async () => {
-      expect.assertions(6)
+    let expectedIdToken, expectedAccessToken
+    let loginEvents, sessionEvents
+
+    beforeEach(async () => {
+      loginEvents = []
+      sessionEvents = []
+      instance.on('login', (...params) => loginEvents.push(params))
+      instance.on('session', (...params) => sessionEvents.push(params))
+
       // To test currentSession with WebID-OIDC it's easist to set up the OIDC RP
       // client by logging in, generating the IDP's response, and redirecting
       // back to the app.
       nock('https://localhost/')
-        // try to log in with WebID-TLS
-        .head('/')
-        .reply(200)
-        // no user header, so try to use WebID-OIDC
         .get('/.well-known/openid-configuration')
         .reply(200, oidcConfiguration)
         .get('/jwks')
@@ -261,10 +235,8 @@ describe('currentSession', () => {
         .get('/jwks')
         .reply(200, jwks)
 
-      let expectedIdToken, expectedAccessToken
-
-      const redirectFn = await login('https://localhost')
-      await redirectFn()
+      window.location.href = 'https://app.biz/page?foo=bar#the-hash-fragment'
+      await instance.login('https://localhost')
       // generate the auth response
       const location = new window.URL(window.location.href)
       const state = location.searchParams.get('state')
@@ -291,7 +263,11 @@ describe('currentSession', () => {
         `token_type=Bearer&` +
         `id_token=${idToken}&` +
         `state=${state}`
-      const session = await currentSession()
+    })
+
+    it('can find the current session from the URL auth response', async () => {
+      expect.assertions(6)
+      const session = await instance.currentSession()
       expect(session.webId).toBe('https://person.me/#me')
       expect(session.accessToken).toBe(expectedAccessToken)
       expect(session.idToken).toBe(expectedIdToken)
@@ -299,34 +275,122 @@ describe('currentSession', () => {
       expect(await getStoredSession()).toEqual(session)
       expect(window.location.hash).toBe('#the-hash-fragment')
     })
+
+    it('triggers the login event on first call', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      expect(loginEvents).toHaveLength(1)
+    })
+
+    it('passes the session as parameter to the login event', async () => {
+      expect.assertions(4)
+      await instance.currentSession()
+      expect(loginEvents).toHaveLength(1)
+      expect(loginEvents[0]).toHaveLength(1)
+
+      const session = loginEvents[0][0]
+      expect(session).toBeInstanceOf(Object)
+      expect(session.webId).toBe('https://person.me/#me')
+    })
+
+    it('does not trigger the login event on subsequent calls', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.currentSession()
+      expect(loginEvents).toHaveLength(1)
+    })
+
+    it('triggers the session event on first call', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      expect(sessionEvents).toHaveLength(1)
+    })
+
+    it('passes the session as parameter to the session event', async () => {
+      expect.assertions(4)
+      await instance.currentSession()
+      expect(sessionEvents).toHaveLength(1)
+      expect(sessionEvents[0]).toHaveLength(1)
+
+      const session = sessionEvents[0][0]
+      expect(session).toBeInstanceOf(Object)
+      expect(session.webId).toBe('https://person.me/#me')
+    })
+
+    it('does not trigger the session event on subsequent calls', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.currentSession()
+      expect(sessionEvents).toHaveLength(1)
+    })
+  })
+})
+
+describe('trackSession', () => {
+  it('yields null if there is no active session', async () => {
+    expect.assertions(2)
+    const callback = jest.fn()
+    await instance.trackSession(callback)
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback).toHaveBeenLastCalledWith(null)
+  })
+
+  it('yields an active session', async () => {
+    expect.assertions(2)
+    const session = {}
+    await saveSession(window.localStorage)(session)
+
+    const callback = jest.fn()
+    await instance.trackSession(callback)
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback).toHaveBeenLastCalledWith(session)
+  })
+
+  it('calls the callback on login', async () => {
+    expect.assertions(4)
+
+    const callback = jest.fn()
+    await instance.trackSession(callback)
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback).toHaveBeenLastCalledWith(null)
+
+    const session = {}
+    instance.emit('session', session)
+    expect(callback).toHaveBeenCalledTimes(2)
+    expect(callback).toHaveBeenLastCalledWith(session)
+  })
+
+  it('calls the callback on logout', async () => {
+    expect.assertions(4)
+    const session = {}
+    await saveSession(window.localStorage)(session)
+
+    const callback = jest.fn()
+    await instance.trackSession(callback)
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback).toHaveBeenLastCalledWith(session)
+
+    await instance.logout()
+    expect(callback).toHaveBeenCalledTimes(2)
+    expect(callback).toHaveBeenLastCalledWith(null)
   })
 })
 
 describe('logout', () => {
-  describe('WebID-TLS', () => {
-    it('just removes the current session from the store', async () => {
-      expect.assertions(1)
-      await saveSession(window.localStorage)({
-        authType: 'WebID-TLS',
-        idp: 'https://localhost',
-        webId: 'https://person.me/#me'
-      })
-      await logout()
-      expect(await getStoredSession()).toBeNull()
-    })
-  })
-
   describe('WebID-OIDC', () => {
-    it('hits the end_session_endpoint and clears the current session from the store', async () => {
-      expect.assertions(7)
+    let expectedIdToken, expectedAccessToken
+    let logoutEvents, sessionEvents
+
+    beforeEach(async () => {
+      logoutEvents = []
+      sessionEvents = []
+      instance.on('logout', (...params) => logoutEvents.push(params))
+      instance.on('session', (...params) => sessionEvents.push(params))
+
       // To test currentSession with WebID-OIDC it's easist to set up the OIDC RP
       // client by logging in, generating the IDP's response, and redirecting
       // back to the app.
       nock('https://localhost/')
-        // try to log in with WebID-TLS
-        .head('/')
-        .reply(200)
-        // no user header, so try to use WebID-OIDC
         .get('/.well-known/openid-configuration')
         .reply(200, oidcConfiguration)
         .get('/jwks')
@@ -340,10 +404,7 @@ describe('logout', () => {
         .get('/logout')
         .reply(200)
 
-      let expectedIdToken, expectedAccessToken
-
-      const redirectFn = await login('https://localhost')
-      await redirectFn()
+      await instance.login('https://localhost')
       // generate the auth response
       const location = new window.URL(window.location.href)
       const state = location.searchParams.get('state')
@@ -370,7 +431,11 @@ describe('logout', () => {
         `token_type=Bearer&` +
         `id_token=${idToken}&` +
         `state=${state}`
-      const session = await currentSession()
+    })
+
+    it('hits the end_session_endpoint and clears the current session from the store', async () => {
+      expect.assertions(7)
+      const session = await instance.currentSession()
       expect(session.webId).toBe('https://person.me/#me')
       expect(session.accessToken).toBe(expectedAccessToken)
       expect(session.idToken).toBe(expectedIdToken)
@@ -378,8 +443,49 @@ describe('logout', () => {
       expect(window.location.hash).toBe('#the-hash-fragment')
       const storedSession = await getStoredSession()
       expect(storedSession).toEqual(session)
-      await logout()
+      await instance.logout()
       expect(await getStoredSession()).toBeNull()
+    })
+
+    it('triggers the logout event on first call', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.logout()
+      expect(logoutEvents).toHaveLength(1)
+    })
+
+    it('does not trigger the logout event on subsequent calls', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.logout()
+      await instance.logout()
+      expect(logoutEvents).toHaveLength(1)
+    })
+
+    it('triggers the session event on first call', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.logout()
+      expect(sessionEvents).toHaveLength(2)
+    })
+
+    it('passes null as parameter to the session event', async () => {
+      expect.assertions(3)
+      await instance.currentSession()
+      await instance.logout()
+      expect(sessionEvents).toHaveLength(2)
+      expect(sessionEvents[1]).toHaveLength(1)
+
+      const session = sessionEvents[1][0]
+      expect(session).toBeNull()
+    })
+
+    it('does not trigger the session event on subsequent calls', async () => {
+      expect.assertions(1)
+      await instance.currentSession()
+      await instance.logout()
+      await instance.logout()
+      expect(sessionEvents).toHaveLength(2)
     })
   })
 })
@@ -397,7 +503,6 @@ describe('fetch', () => {
   it('handles 401s from WebID-OIDC resources by resending with credentials', async () => {
     expect.assertions(1)
     await saveSession(window.localStorage)({
-      authType: 'WebID-OIDC',
       idp: 'https://localhost',
       webId: 'https://person.me/#me',
       accessToken: 'fake_access_token',
@@ -412,13 +517,14 @@ describe('fetch', () => {
       .matchHeader('authorization', matchAuthzHeader('https://third-party.com'))
       .reply(200)
 
-    const resp = await fetch('https://third-party.com/protected-resource')
+    const resp = await instance.fetch(
+      'https://third-party.com/protected-resource'
+    )
     expect(resp.status).toBe(200)
   })
 
   it('merges request headers with the authorization header', async () => {
     await saveSession(window.localStorage)({
-      authType: 'WebID-OIDC',
       idp: 'https://localhost',
       webId: 'https://person.me/#me',
       accessToken: 'fake_access_token',
@@ -434,16 +540,18 @@ describe('fetch', () => {
       .matchHeader('authorization', matchAuthzHeader('https://third-party.com'))
       .reply(200)
 
-    const resp = await fetch('https://third-party.com/private-resource', {
-      headers: { accept: 'text/plain' }
-    })
+    const resp = await instance.fetch(
+      'https://third-party.com/private-resource',
+      {
+        headers: { accept: 'text/plain' }
+      }
+    )
     expect(resp.status).toBe(200)
   })
 
   it('does not resend with credentials if the www-authenticate header is missing', async () => {
     expect.assertions(1)
     await saveSession(window.localStorage)({
-      authType: 'WebID-OIDC',
       idp: 'https://localhost',
       webId: 'https://person.me/#me',
       accessToken: 'fake_access_token',
@@ -455,13 +563,14 @@ describe('fetch', () => {
       .get('/protected-resource')
       .reply(401)
 
-    const resp = await fetch('https://third-party.com/protected-resource')
+    const resp = await instance.fetch(
+      'https://third-party.com/protected-resource'
+    )
     expect(resp.status).toBe(401)
   })
 
   it('does not resend with credentials if the www-authenticate header suggests an unknown scheme', async () => {
     await saveSession(window.localStorage)({
-      authType: 'WebID-OIDC',
       idp: 'https://localhost',
       webId: 'https://person.me/#me',
       accessToken: 'fake_access_token',
@@ -473,7 +582,9 @@ describe('fetch', () => {
       .get('/protected-resource')
       .reply(401, '', { 'www-authenticate': 'Basic token' })
 
-    const resp = await fetch('https://third-party.com/protected-resource')
+    const resp = await instance.fetch(
+      'https://third-party.com/protected-resource'
+    )
     expect(resp.status).toBe(401)
   })
 
@@ -483,7 +594,9 @@ describe('fetch', () => {
       .get('/protected-resource')
       .reply(401, '', { 'www-authenticate': 'Bearer scope="openid webid"' })
 
-    const resp = await fetch('https://third-party.com/protected-resource')
+    const resp = await instance.fetch(
+      'https://third-party.com/protected-resource'
+    )
     expect(resp.status).toBe(401)
   })
 
@@ -493,7 +606,7 @@ describe('fetch', () => {
       .get('/public-resource')
       .reply(200, 'public content', { 'content-type': 'text/plain' })
 
-    const resp = await fetch('https://third-party.com/public-resource')
+    const resp = await instance.fetch('https://third-party.com/public-resource')
     expect(resp.status).toBe(200)
     const body = await resp.text()
     expect(body).toEqual('public content')
@@ -505,7 +618,9 @@ describe('fetch', () => {
       .get('/protected-resource')
       .reply(401, '', { 'www-authenticate': 'Bearer scope="openid"' })
 
-    const resp = await fetch('https://third-party.com/protected-resource')
+    const resp = await instance.fetch(
+      'https://third-party.com/protected-resource'
+    )
     expect(resp.status).toBe(401)
   })
 
@@ -513,7 +628,6 @@ describe('fetch', () => {
     it('just sends one request when the RP is also the IDP', async () => {
       expect.assertions(1)
       await saveSession(window.localStorage)({
-        authType: 'WebID-OIDC',
         idp: 'https://localhost',
         webId: 'https://person.me/#me',
         accessToken: 'fake_access_token',
@@ -526,14 +640,13 @@ describe('fetch', () => {
         .matchHeader('authorization', matchAuthzHeader('https://localhost'))
         .reply(200)
 
-      const resp = await fetch('https://localhost/resource')
+      const resp = await instance.fetch('https://localhost/resource')
       expect(resp.status).toBe(200)
     })
 
     it('just sends one request to domains it has already encountered', async () => {
       expect.assertions(1)
       await saveSession(window.localStorage)({
-        authType: 'WebID-OIDC',
         idp: 'https://localhost',
         webId: 'https://person.me/#me',
         accessToken: 'fake_access_token',
@@ -543,7 +656,7 @@ describe('fetch', () => {
 
       await saveHost(window.localStorage)({
         url: 'third-party.com',
-        authType: 'WebID-OIDC'
+        requiresAuth: true
       })
 
       nock('https://third-party.com')
@@ -554,32 +667,8 @@ describe('fetch', () => {
         )
         .reply(200)
 
-      const resp = await fetch('https://third-party.com/resource')
+      const resp = await instance.fetch('https://third-party.com/resource')
       expect(resp.status).toBe(200)
-    })
-
-    it('does not send credentials to a familiar domain when that domain uses a different auth type', async () => {
-      expect.assertions(1)
-      await saveSession(window.localStorage)({
-        authType: 'WebID-OIDC',
-        idp: 'https://localhost',
-        webId: 'https://person.me/#me',
-        accessToken: 'fake_access_token',
-        idToken: 'abc.def.ghi',
-        sessionKey
-      })
-
-      await saveHost(window.localStorage)({
-        url: 'third-party.com',
-        authType: 'WebID-TLS'
-      })
-
-      nock('https://third-party.com')
-        .get('/resource')
-        .reply(401)
-
-      const resp = await fetch('https://third-party.com/resource')
-      expect(resp.status).toBe(401)
     })
   })
 })

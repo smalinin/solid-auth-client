@@ -1,12 +1,11 @@
 // @flow
-/* global fetch, RequestInfo, Response */
-import 'isomorphic-fetch'
+/* global RequestInfo, Response */
 import * as authorization from 'auth-header'
 import RelyingParty from '@trust/oidc-rp'
 import PoPToken from '@trust/oidc-rp/lib/PoPToken'
 
-import type { loginOptions } from './api'
-import { currentUrl, navigateTo } from './url-util'
+import type { loginOptions } from './solid-auth-client'
+import { currentUrl, navigateTo, toUrlString } from './url-util'
 import type { webIdOidcSession } from './session'
 import type { AsyncStorage } from './storage'
 import { defaultStorage, getData, updateStorage } from './storage'
@@ -14,11 +13,11 @@ import { defaultStorage, getData, updateStorage } from './storage'
 export const login = async (
   idp: string,
   options: loginOptions
-): Promise<null | (() => any)> => {
+): Promise<?null> => {
   try {
     const rp = await getRegisteredRp(idp, options)
     await saveAppHashFragment(options.storage)
-    return () => sendAuthRequest(rp, options)
+    return sendAuthRequest(rp, options)
   } catch (err) {
     console.warn('Error logging in with WebID-OIDC')
     console.error(err)
@@ -35,7 +34,7 @@ export const currentSession = async (
       return null
     }
     const url = currentUrl()
-    if (!url || !url.includes('#')) {
+    if (!url || !url.includes('#access_token=')) {
       return null
     }
     const storeData = await getData(storage)
@@ -46,7 +45,6 @@ export const currentSession = async (
     await restoreAppHashFragment(storage)
     const { idp, idToken, accessToken, clientId, sessionKey } = resp
     return {
-      authType: 'WebID-OIDC',
       webId: resp.decoded.payload.sub,
       idp,
       idToken,
@@ -176,16 +174,18 @@ export const requiresAuth = (resp: Response): boolean => {
  * Assumes that the resource has requested those tokens in a previous response.
  */
 export const fetchWithCredentials = (session: webIdOidcSession) => async (
-  url: RequestInfo,
+  fetch: Function,
+  input: RequestInfo,
   options?: Object
 ): Promise<Response> => {
-  const popToken = await PoPToken.issueFor(url, session)
+  const popToken = await PoPToken.issueFor(toUrlString(input), session)
   const authenticatedOptions = {
     ...options,
+    credentials: 'include',
     headers: {
       ...(options && options.headers ? options.headers : {}),
       authorization: `Bearer ${popToken}`
     }
   }
-  return fetch(url, authenticatedOptions)
+  return fetch(input, authenticatedOptions)
 }
