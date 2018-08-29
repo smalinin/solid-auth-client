@@ -41,13 +41,13 @@ if (!process.argv.slice(2).length) {
 
 // generatePopup command
 
-function generatePopup(appName = 'the application', filename = 'popup.html') {
+function generatePopup(appName = '', filename = 'popup.html') {
   log(`Generating "${filename}" with app name "${appName}".`)
 
   const templateFilename = path.resolve(
     __dirname,
     '..',
-    'dist-popup/popup.html'
+    'dist-popup/popup-template.html'
   )
   if (!fs.existsSync(templateFilename)) {
     warn(
@@ -67,7 +67,7 @@ function generatePopup(appName = 'the application', filename = 'popup.html') {
 
   const popupBuffer = popupTemplateBuffer
     .toString()
-    .replace(/{{APP_NAME}}/g, appName)
+    .replace(/['"]{{APP_NAME}}['"]/g, JSON.stringify(appName))
 
   try {
     fs.writeFileSync(filename, popupBuffer)

@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { login } from '../../src/api'
+import auth from '../../src'
 import { client } from '../../src/ipc'
 import { postMessageStorage } from '../../src/storage'
 
@@ -64,12 +64,12 @@ class IdpSelect extends React.Component {
       ...loginOptions,
       storage: postMessageStorage(window.opener, appOrigin)
     }
-    const maybeSession = await login(idp.url, loginOptions)
-    if (typeof maybeSession === 'object') {
-      await request({ method: 'foundSession', args: [maybeSession] })
-      window.close()
-    } else if (typeof maybeSession === 'function') {
-      maybeSession()
+    await auth.login(idp.url, loginOptions)
+  }
+
+  componentDidUpdate() {
+    if (this.idpInput) {
+      this.idpInput.focus()
     }
   }
 
@@ -78,49 +78,38 @@ class IdpSelect extends React.Component {
     const { customIdp, enteringCustomIdp, error } = this.state
     return (
       <div>
-        <h1 className="center">
+        <h1>
           Log in to <span className="app-name">{appName}</span>
         </h1>
         {error && <Error error={error} />}
-        <p className="copy-gentle center">Choose where you log in</p>
-        {enteringCustomIdp ? (
+        <p>Choose where you log in</p>
+        {enteringCustomIdp && (
           <form
-            className="form-inline"
+            className="custom-idp"
             onSubmit={this.handleSelectIdp(customIdp)}
           >
             <input
-              className="form-inline__input-text"
+              ref={input => (this.idpInput = input)}
               type="url"
               placeholder="https://my-identity.databox.me/profile/card#me"
               value={customIdp.url}
               onChange={this.handleChangeIdp}
             />
-            <div className="form-inline__controls">
-              <button className="btn" type="submit">
-                Log In
-              </button>
-              <button
-                className="btn"
-                type="reset"
-                onClick={this.toggleEnteringCustomIdp}
-              >
-                Cancel
-              </button>
-            </div>
+            <button type="submit">Log In</button>
+            <button type="reset" onClick={this.toggleEnteringCustomIdp}>
+              Cancel
+            </button>
           </form>
-        ) : (
-          <button
-            className="btn btn-link"
-            onClick={this.toggleEnteringCustomIdp}
-          >
-            Choose a custom Solid account
-          </button>
         )}
         <div className="idp-list">
+          <Idp
+            idp={{ displayName: 'custom provider' }}
+            handleSelectIdp={this.toggleEnteringCustomIdp}
+          />
           {idps.map(idp => (
             <Idp
               idp={idp}
-              handleSelectIdp={this.handleSelectIdp}
+              handleSelectIdp={this.handleSelectIdp(idp)}
               key={idp.url}
             />
           ))}
@@ -131,16 +120,18 @@ class IdpSelect extends React.Component {
 }
 
 const Idp = ({ idp, handleSelectIdp }) => (
-  <div className="idp">
-    <button className="idp__select" onClick={handleSelectIdp(idp)}>
-      <span className="idp__copy">Log in with {idp.displayName}</span>
-      <span className="idp__icon-container">
-        <img className="idp__icon" src={idp.iconUrl} alt="" />
-      </span>
-    </button>
-  </div>
+  <button className="idp" onClick={handleSelectIdp}>
+    <span class="label">Log in with {idp.displayName}</span>
+    {idp.iconUrl ? (
+      <img className="icon" src={idp.iconUrl} alt="" />
+    ) : (
+      <svg className="icon" width="32" viewBox="0 0 100 20" alt="">
+        <path d="M41.2,50c0-4.9,4-8.8,8.8-8.8s8.8,4,8.8,8.8c0,4.9-4,8.8-8.8,8.8S41.2,54.9,41.2,50z M80.3,41.2c-4.9,0-8.8,4-8.8,8.8 c0,4.9,4,8.8,8.8,8.8s8.8-4,8.8-8.8C89.2,45.1,85.2,41.2,80.3,41.2z M19.7,41.2c-4.9,0-8.8,4-8.8,8.8c0,4.9,4,8.8,8.8,8.8 s8.8-4,8.8-8.8C28.5,45.1,24.5,41.2,19.7,41.2z" />
+      </svg>
+    )}
+  </button>
 )
 
-const Error = ({ error }) => <div className="error center">{error}</div>
+const Error = ({ error }) => <p className="error">{error}</p>
 
 export default IdpSelect
