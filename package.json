@@ -1,6 +1,6 @@
 {
   "name": "solid-auth-client",
-  "version": "2.2.0",
+  "version": "2.2.3",
   "description": "Opaquely authenticates solid clients",
   "main": "lib/index.js",
   "bin": "./bin/solid-auth-client.js",
@@ -44,7 +44,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@trust/oidc-rp": "^0.4.3",
+    "@solid/oidc-rp": "^0.7.1",
     "auth-header": "^0.3.1",
     "commander": "^2.11.0",
     "isomorphic-fetch": "^2.2.1",
