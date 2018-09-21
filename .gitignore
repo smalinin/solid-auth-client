@@ -66,8 +66,8 @@ typings/
 .vscode
 
 # build
-lib
-dist-lib
-dist-popup
+# lib
+# dist-lib
+# dist-popup
 dist-demo
-popup.html
+# popup.html
