@@ -1,4 +1,4 @@
-import SolidAuthClient from './solid-auth-client'
+const SolidAuthClient = require('./solid-auth-client').default
 
 // Export a singleton instance of SolidAuthClient
 const auth = new SolidAuthClient()
@@ -13,21 +13,25 @@ Object.getOwnPropertyNames(SolidAuthClient.prototype).forEach(property => {
 })
 
 // Export the instance as an object for backward compatibility
-// (should become a default export of auth)
+// (should become a default export)
 module.exports = auth
 
 // Expose window.SolidAuthClient for backward compatibility
 if (typeof window !== 'undefined') {
-  let warned = false
-  Object.defineProperty(window, 'SolidAuthClient', {
-    enumerable: true,
-    get: () => {
-      if (!warned) {
-        warned = true
-        console.warn('window.SolidAuthClient has been deprecated.')
-        console.warn('Please use window.solid.auth instead.')
+  if ('SolidAuthClient' in window) {
+    console.warn('Caution: multiple versions of solid-auth-client active.')
+  } else {
+    let warned = false
+    Object.defineProperty(window, 'SolidAuthClient', {
+      enumerable: true,
+      get: () => {
+        if (!warned) {
+          warned = true
+          console.warn('window.SolidAuthClient has been deprecated.')
+          console.warn('Please use window.solid.auth instead.')
+        }
+        return auth
       }
-      return auth
-    }
-  })
+    })
+  }
 }
