@@ -44,7 +44,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@solid/oidc-rp": "git+https://github.com/OpenLinkSoftware/oidc-rp.git#openlink",
+    "@solid/oidc-rp": "^0.8.0",
     "auth-header": "^1.0.0",
     "@babel/runtime": "^7.0.0",
     "commander": "^2.11.0",
