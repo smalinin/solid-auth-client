@@ -10,10 +10,10 @@ import type { webIdOidcSession } from './session'
 import type { AsyncStorage } from './storage'
 import { defaultStorage, getData, updateStorage } from './storage'
 
-export const login = async (
+export async function login(
   idp: string,
   options: loginOptions
-): Promise<?null> => {
+): Promise<?null> {
   try {
     const rp = await getRegisteredRp(idp, options)
     await saveAppHashFragment(options.storage)
@@ -25,9 +25,9 @@ export const login = async (
   }
 }
 
-export const currentSession = async (
+export async function currentSession(
   storage: AsyncStorage = defaultStorage()
-): Promise<?webIdOidcSession> => {
+): Promise<?webIdOidcSession> {
   try {
     const rp = await getStoredRp(storage)
     if (!rp) {
@@ -55,26 +55,36 @@ export const currentSession = async (
   }
 }
 
-export const logout = (storage: AsyncStorage): Promise<void> =>
-  getStoredRp(storage)
-    .then(rp => (rp ? rp.logout() : undefined))
-    .catch(err => {
+export async function logout(storage: AsyncStorage): Promise<void> {
+  const rp = await getStoredRp(storage)
+  if (rp) {
+    try {
+      rp.logout()
+    } catch (err) {
       console.warn('Error logging out of the WebID-OIDC session')
       console.error(err)
-    })
+    }
+  }
+}
 
-export const getRegisteredRp = (
+export async function getRegisteredRp(
   idp: string,
   options: loginOptions
-): Promise<RelyingParty> =>
-  getStoredRp(options.storage).then(rp => {
-    if (rp && rp.provider.url === idp) {
-      return rp
-    }
-    return registerRp(idp, options).then(rp =>
-      storeRp(options.storage, idp, rp)
-    )
-  })
+): Promise<RelyingParty> {
+  // To reuse a possible previous RP,
+  // it be for the same IDP and redirect URI
+  let rp = await getStoredRp(options.storage)
+  if (
+    !rp ||
+    rp.provider.url !== idp ||
+    !rp.registration.redirect_uris.includes(options.callbackUri)
+  ) {
+    // Register a new RP
+    rp = await registerRp(idp, options)
+    await storeRp(options.storage, idp, rp)
+  }
+  return rp
+}
 
 async function getStoredRp(storage: AsyncStorage): Promise<?RelyingParty> {
   const data = await getData(storage)
@@ -99,10 +109,10 @@ async function storeRp(
   return rp
 }
 
-const registerRp = (
+function registerRp(
   idp: string,
   { storage, callbackUri }: loginOptions
-): Promise<RelyingParty> => {
+): Promise<RelyingParty> {
   const responseType = 'id_token token'
   const registration = {
     issuer: idp,
@@ -123,33 +133,35 @@ const registerRp = (
   return RelyingParty.register(idp, registration, options)
 }
 
-const sendAuthRequest = async (
+async function sendAuthRequest(
   rp: RelyingParty,
   { callbackUri, storage }: loginOptions
-): Promise<void> => {
+): Promise<void> {
   const data = await getData(storage)
   const url = await rp.createRequest({ redirect_uri: callbackUri }, data)
   await updateStorage(storage, () => data)
   return navigateTo(url)
 }
 
-const saveAppHashFragment = (store: AsyncStorage): Promise<any> =>
-  updateStorage(store, data => ({
+async function saveAppHashFragment(store: AsyncStorage): Promise<void> {
+  await updateStorage(store, data => ({
     ...data,
     appHashFragment: window.location.hash
   }))
+}
 
-const restoreAppHashFragment = (store: AsyncStorage): Promise<any> =>
-  updateStorage(store, data => {
+async function restoreAppHashFragment(store: AsyncStorage): Promise<void> {
+  await updateStorage(store, data => {
     window.location.hash = data.appHashFragment
     delete data.appHashFragment
     return data
   })
+}
 
 /**
  * Answers whether a HTTP response requires WebID-OIDC authentication.
  */
-export const requiresAuth = (resp: Response): boolean => {
+export function requiresAuth(resp: Response): boolean {
   if (resp.status !== 401) {
     return false
   }
@@ -169,11 +181,12 @@ export const requiresAuth = (resp: Response): boolean => {
  * Fetches a resource, providing the WebID-OIDC ID Token as authentication.
  * Assumes that the resource has requested those tokens in a previous response.
  */
-export const fetchWithCredentials = (session: webIdOidcSession) => async (
+export async function fetchWithCredentials(
+  session: webIdOidcSession,
   fetch: Function,
   input: RequestInfo,
-  options?: Object
-): Promise<Response> => {
+  options?: RequestOptions
+): Promise<Response> {
   const popToken = await PoPToken.issueFor(toUrlString(input), session)
   const authenticatedOptions = {
     ...options,

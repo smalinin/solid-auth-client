@@ -1,16 +1,10 @@
 import React from 'react'
 
 import auth from '../../src'
-import { client } from '../../src/ipc'
-import { postMessageStorage } from '../../src/storage'
+import { Client } from '../../src/ipc'
+import { ipcStorage, getData } from '../../src/storage'
 
 import './IdpSelect.css'
-
-const timeout = (promise, ms) =>
-  Promise.race([
-    promise,
-    new Promise((resolve, reject) => setTimeout(() => resolve(null), ms))
-  ])
 
 class IdpSelect extends React.Component {
   state = {
@@ -21,16 +15,25 @@ class IdpSelect extends React.Component {
 
   toggleEnteringCustomIdp = () =>
     this.setState(currentState => ({
-      enteringCustomIdp: !currentState.enteringCustomIdp,
-      customIdp: { url: '' }
+      enteringCustomIdp: !currentState.enteringCustomIdp
     }))
 
   handleChangeIdp = event => {
-    this.setState({ customIdp: { url: event.target.value } })
+    let url = event.target.value
+    // Auto-prepend https: if the user is not typing it
+    if (!/^($|h$|ht)/.test(url)) url = `https://${url}`
+    this.setState({ customIdp: { url } })
+  }
+
+  handleBlurIdp = event => {
+    let url = event.target.value
+    // Auto-prepend https: if not present
+    if (!/^(https?:\/\/|$)/.test(url))
+      url = url.replace(/^([a-z]*:\/*)?/, 'https://')
+    this.setState({ customIdp: { url } })
   }
 
   handleSelectIdp = idp => async event => {
-    const { appOrigin } = this.props
     event.preventDefault()
     if (!window.opener) {
       console.warn('No parent window')
@@ -41,30 +44,26 @@ class IdpSelect extends React.Component {
       })
       return
     }
-    const request = client(window.opener, appOrigin)
-    let loginOptions = await timeout(
-      request({
-        method: 'getLoginOptions',
-        args: []
-      }),
-      2000
-    )
-    if (!loginOptions) {
-      console.warn(
-        'Cannot log in - have not yet received loginOptions from parent window'
-      )
-      this.setState({
-        error:
-          "Couldn't find the application window.  " +
-          'Try closing this popup window and logging in again.'
-      })
-      return
-    }
-    loginOptions = {
-      ...loginOptions,
-      storage: postMessageStorage(window.opener, appOrigin)
+    const loginOptions = {
+      ...(await this.getClient().request('getLoginOptions')),
+      storage: this.getStorage()
     }
     await auth.login(idp.url, loginOptions)
+  }
+
+  getClient() {
+    return new Client(window.opener, this.props.appOrigin)
+  }
+
+  getStorage() {
+    return ipcStorage(this.getClient())
+  }
+
+  async componentDidMount() {
+    const { rpConfig } = await getData(this.getStorage())
+    if (rpConfig) {
+      this.setState({ customIdp: { url: rpConfig.provider.url } })
+    }
   }
 
   componentDidUpdate() {
@@ -91,9 +90,10 @@ class IdpSelect extends React.Component {
             <input
               ref={input => (this.idpInput = input)}
               type="url"
-              placeholder="https://my-identity.databox.me/profile/card#me"
+              placeholder="https://my-identity.provider"
               value={customIdp.url}
               onChange={this.handleChangeIdp}
+              onBlur={this.handleBlurIdp}
             />
             <button type="submit">Log In</button>
             <button type="reset" onClick={this.toggleEnteringCustomIdp}>

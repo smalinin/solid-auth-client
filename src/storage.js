@@ -1,5 +1,5 @@
 // @flow
-import { client } from './ipc'
+import { Client } from './ipc'
 
 export const NAMESPACE = 'solid-auth-client'
 
@@ -93,28 +93,15 @@ export const memStorage = (): Storage => {
   }
 }
 
-export const postMessageStorage = (
-  storageWindow: window,
-  storageOrigin: string
-): AsyncStorage => {
-  const request = client(storageWindow, storageOrigin)
+export function ipcStorage(client: Client): AsyncStorage {
   return {
-    getItem: async (key: string): Promise<?string> => {
-      const ret = await request({ method: 'storage/getItem', args: [key] })
-      if (typeof ret !== 'string') {
-        throw new Error(
-          `expected postMessage call for 'storage/getItem' to return a string, but got value ${ret}`
-        )
-      }
-      return ret
-    },
+    getItem: (key: string): Promise<?string> =>
+      client.request('storage/getItem', key),
 
-    setItem: (key: string, val: string): Promise<void> => {
-      return request({ method: 'storage/setItem', args: [key, val] })
-    },
+    setItem: (key: string, val: string): Promise<void> =>
+      client.request('storage/setItem', key, val),
 
-    removeItem: (key: string): Promise<void> => {
-      return request({ method: 'storage/removeItem', args: [key] })
-    }
+    removeItem: (key: string): Promise<void> =>
+      client.request('storage/removeItem', key)
   }
 }
