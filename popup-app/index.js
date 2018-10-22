@@ -2,7 +2,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
 
-import { client } from '../src/ipc'
+import { Client } from '../src/ipc'
 import { getData, updateStorage } from '../src/storage'
 
 import IdpCallback from './components/IdpCallback'
@@ -24,35 +24,42 @@ const defaultIdps = [
   }
 ]
 
-findAppOrigin().then(appOrigin => {
-  const baseUrl = window.location.href.replace(/(\/\/[^/]*\/).*/, '$1')
-  const host = baseUrl.replace(/^[^:]+:|\//g, '')
-  const appName = process.env.APP_NAME.trim() || host
+findAppOrigin()
+  .then(appOrigin => {
+    const baseUrl = window.location.href.replace(/(\/\/[^/]*\/).*/, '$1')
+    const host = baseUrl.replace(/^[^:]+:|\//g, '')
+    const appName = process.env.APP_NAME.trim() || host
 
-  let element
-  if (!appOrigin) {
-    element = <NoParent appName={appName} />
-  } else if (window.location.hash) {
-    element = (
-      <IdpCallback
-        appOrigin={appOrigin}
-        afterLoggedIn={() => setTimeout(window.close, 750)}
-      />
-    )
-  } else {
-    const idps = [...defaultIdps]
-    if (!idps.some(idp => idp.url === baseUrl)) {
-      idps.unshift({
-        displayName: host,
-        url: baseUrl,
-        iconUrl: baseUrl + 'favicon.ico'
-      })
+    let element
+    if (!appOrigin) {
+      element = <NoParent appName={appName} />
+    } else if (window.location.hash) {
+      element = (
+        <IdpCallback
+          appOrigin={appOrigin}
+          afterLoggedIn={() => setTimeout(window.close, 750)}
+        />
+      )
+    } else {
+      const idps = [...defaultIdps]
+      if (!idps.some(idp => idp.url === baseUrl)) {
+        idps.unshift({
+          displayName: host,
+          url: baseUrl,
+          iconUrl: baseUrl + 'favicon.ico'
+        })
+      }
+      element = (
+        <IdpSelect idps={idps} appOrigin={appOrigin} appName={appName} />
+      )
     }
-    element = <IdpSelect idps={idps} appOrigin={appOrigin} appName={appName} />
-  }
 
-  ReactDOM.render(element, document.getElementById('app-container'))
-})
+    ReactDOM.render(element, document.getElementById('app-container'))
+  })
+  .catch(error => {
+    window.alert(error)
+    window.close()
+  })
 
 async function findAppOrigin() {
   if (!window.opener) {
@@ -62,11 +69,8 @@ async function findAppOrigin() {
   if (appOrigin) {
     return appOrigin
   }
-  const request = client(window.opener, '*')
-  appOrigin = await request({
-    method: 'getAppOrigin',
-    args: []
-  })
+  const client = new Client(window.opener, '*')
+  appOrigin = await client.request('getAppOrigin')
   await storeAppOrigin(appOrigin)
   return appOrigin
 }
