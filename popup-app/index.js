@@ -26,6 +26,11 @@ const defaultIdps = [
     displayName: 'OpenLink WebID-OIDC Authentication Service',
     url: 'https://solid.openlinksw.com:8444/',
     iconUrl: 'https://solidtest.space/favicon.ico'
+  },
+  {
+    displayName: 'OpenLink Data Spaces (QA Server)',
+    url: 'https://ods-qa.openlinksw.com',
+    iconUrl: 'https://solidtest.space/favicon.ico'
   }
 ]
 
